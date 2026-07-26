@@ -4,6 +4,7 @@ import dashboardRoutes from './dashboard.routes';
 import syncRoutes from './sync.routes';
 import caseRoutes from './case.routes';
 import reportsRoutes from './reports.routes';
+import flightsRoutes from './flights.routes';
 
 const router = Router();
 
@@ -22,5 +23,6 @@ router.use('/dashboard', dashboardRoutes);
 router.use('/sync', syncRoutes);
 router.use('/cases', caseRoutes);
 router.use('/reports', reportsRoutes);
+router.use('/flights', flightsRoutes);
 
 export default router;
