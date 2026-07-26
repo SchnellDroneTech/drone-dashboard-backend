@@ -102,6 +102,7 @@ model EnforcementArea {
   dailyStatistics  DailyStatistics[]
   monthlyStatistics MonthlyStatistics[]
   sheetTabs        SheetTab[]
+  flights          Flight[]
 
   @@map("enforcement_areas")
 }
@@ -748,6 +749,32 @@ model ObservationHistory {
   @@index([observationId])
   @@index([createdAt])
   @@map("observation_history")
+}
+
+// =============================================================================
+// FLIGHT TRACKING TABLE
+// =============================================================================
+
+model Flight {
+  id                String   @id @default(uuid())
+  flightCode        String   @unique @map("flight_code") @db.VarChar(100) // Unique: location + date + takeoff time
+  enforcementAreaId String   @map("enforcement_area_id")
+  location          String   @db.VarChar(200) // Flying location name
+  flightDate        DateTime @map("flight_date") @db.Date
+  takeoffTime       DateTime @map("takeoff_time") @db.Time()
+  landingTime       DateTime @map("landing_time") @db.Time()
+  durationMinutes   Int      @map("duration_minutes") // Calculated: landing - takeoff in minutes
+  remarks           String?  @db.Text
+  createdBy         String?  @map("created_by")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  enforcementArea EnforcementArea @relation(fields: [enforcementAreaId], references: [id])
+
+  @@index([flightDate])
+  @@index([enforcementAreaId])
+  @@map("flights")
 }
 
 // =============================================================================
