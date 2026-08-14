@@ -14,6 +14,7 @@ import { pdfService, CasePdfData, loadSignerInfo } from '../services/pdf.service
 import { pdfSigner } from '../utils/pdfSigner';
 import { emailService } from '../services/email.service';
 import { exotelService } from '../services/exotel.service';
+import { msg91Service } from '../services/msg91.service';
 import { format } from 'date-fns';
 import { prisma } from '../config/database';
 import { logger } from '../config/logger';
@@ -70,6 +71,47 @@ export async function createCase(req: AuthenticatedRequest, res: Response): Prom
         error: result.error,
       });
       return;
+    }
+
+    // Send Detected Violation SMS to vessel owner (fire and forget)
+    try {
+      const phoneNumbers: string[] = [];
+      if (input.ownerContact1) phoneNumbers.push(input.ownerContact1);
+      if (input.ownerContact2) phoneNumbers.push(input.ownerContact2);
+
+      if (phoneNumbers.length > 0) {
+        // Fetch district and violation type names
+        const [enforcementArea, violationType] = await Promise.all([
+          prisma.enforcementArea.findUnique({
+            where: { id: input.enforcementAreaId },
+            select: { name: true },
+          }),
+          input.violationTypeId
+            ? prisma.violationType.findUnique({
+                where: { id: input.violationTypeId },
+                select: { name: true },
+              })
+            : null,
+        ]);
+
+        const observationDate = input.observationDate || new Date();
+        const smsResult = await msg91Service.sendDetectedViolationSms(phoneNumbers, {
+          district: enforcementArea?.name || 'Unknown',
+          vesselName: input.vesselName || 'Unknown',
+          vesselNumber: input.vesselNumber || 'Unknown',
+          ownerName: input.ownerName || 'Unknown',
+          date: format(observationDate, 'dd/MM/yyyy'),
+          time: input.observationTime || format(observationDate, 'HH:mm'),
+          latitude: input.latitude?.toString() || 'N/A',
+          longitude: input.longitude?.toString() || 'N/A',
+          violationType: violationType?.name || 'Unknown',
+        });
+
+        logger.info(`Detected Violation SMS for case: ${smsResult.sent}/${phoneNumbers.length} sent`);
+      }
+    } catch (smsError) {
+      // Log but don't fail the case creation
+      logger.error('Failed to send Detected Violation SMS:', smsError);
     }
 
     res.status(201).json({
@@ -1070,8 +1112,9 @@ export async function generateCasePdf(req: AuthenticatedRequest, res: Response):
       }
     }
 
-    // Send SMS and WhatsApp to vessel owner
+    // Send SMS (via MSG91) and WhatsApp (via Exotel) to vessel owner
     let smsWhatsAppResult = null;
+    let msg91SmsResult = null;
     let smsError = null;
     const ownerPhones: string[] = [];
     if (observation.ownerContact1) ownerPhones.push(observation.ownerContact1);
@@ -1084,6 +1127,30 @@ export async function generateCasePdf(req: AuthenticatedRequest, res: Response):
     const uniquePhones = [...new Set(ownerPhones.filter(p => p && p.trim()))];
 
     if (sendEmails && uniquePhones.length > 0) {
+      // Send HEARING_NOTICE SMS via MSG91
+      try {
+        // Office name is constructed from district name
+        const officeName = `सहाय्यक आयुक्त मत्स्यव्यवसाय कार्यालय, ${pdfData.districtName}`;
+
+        msg91SmsResult = await msg91Service.sendHearingNoticeSms(uniquePhones, {
+          district: pdfData.districtName,
+          vesselName: pdfData.vesselName,
+          vesselNumber: pdfData.registrationNumber,
+          ownerName: pdfData.ownerName,
+          observationDate: pdfData.observationDate,
+          officeName: officeName,
+          hearingDate: pdfData.hearingDate || 'To be announced',
+        });
+
+        logger.info(
+          `MSG91 Hearing Notice SMS for ${id}: ${msg91SmsResult.sent}/${uniquePhones.length} sent`
+        );
+      } catch (err) {
+        logger.error('Error sending MSG91 Hearing Notice SMS:', err);
+        smsError = err instanceof Error ? err.message : 'MSG91 SMS sending failed';
+      }
+
+      // Send WhatsApp via Exotel (keeping existing functionality)
       try {
         smsWhatsAppResult = await exotelService.sendOwnerNotifications(
           uniquePhones,
@@ -1101,18 +1168,21 @@ export async function generateCasePdf(req: AuthenticatedRequest, res: Response):
         );
 
         logger.info(
-          `Owner notifications for ${id}: SMS ${smsWhatsAppResult.sms.sent}/${uniquePhones.length}, ` +
-          `WhatsApp ${smsWhatsAppResult.whatsapp.sent}/${uniquePhones.length}`
+          `Exotel notifications for ${id}: WhatsApp ${smsWhatsAppResult.whatsapp.sent}/${uniquePhones.length}`
         );
       } catch (err) {
-        logger.error('Error sending owner notifications:', err);
-        smsError = err instanceof Error ? err.message : 'SMS/WhatsApp sending failed';
+        logger.error('Error sending Exotel notifications:', err);
+        if (!smsError) {
+          smsError = err instanceof Error ? err.message : 'WhatsApp sending failed';
+        }
       }
     }
 
     // Update notice status
     if (sendEmails) {
       try {
+        const smsSent = msg91SmsResult?.sent || 0;
+        const smsFailed = msg91SmsResult?.failed || 0;
         await prisma.caseNotice.update({
           where: { id: notice.id },
           data: {
@@ -1120,8 +1190,8 @@ export async function generateCasePdf(req: AuthenticatedRequest, res: Response):
             sentAt: new Date(),
             emailSentAt: emailResult ? new Date() : undefined,
             emailStatus: emailResult ? (emailResult.totalFailed === 0 ? 'sent' : 'partial') : (emailError ? 'failed' : undefined),
-            smsSentAt: smsWhatsAppResult?.sms.sent ? new Date() : undefined,
-            smsStatus: smsWhatsAppResult?.sms.sent ? (smsWhatsAppResult.sms.failed === 0 ? 'sent' : 'partial') : (smsError ? 'failed' : undefined),
+            smsSentAt: smsSent > 0 ? new Date() : undefined,
+            smsStatus: smsSent > 0 ? (smsFailed === 0 ? 'sent' : 'partial') : (smsError ? 'failed' : undefined),
             whatsappSentAt: smsWhatsAppResult?.whatsapp.sent ? new Date() : undefined,
             whatsappStatus: smsWhatsAppResult?.whatsapp.sent ? (smsWhatsAppResult.whatsapp.failed === 0 ? 'sent' : 'partial') : undefined,
           },
@@ -1134,7 +1204,7 @@ export async function generateCasePdf(req: AuthenticatedRequest, res: Response):
     res.json({
       success: true,
       message: sendEmails
-        ? `PDF generated, ${emailResult?.totalSent || 0} emails, ${smsWhatsAppResult?.sms.sent || 0} SMS, ${smsWhatsAppResult?.whatsapp.sent || 0} WhatsApp sent`
+        ? `PDF generated, ${emailResult?.totalSent || 0} emails, ${msg91SmsResult?.sent || 0} SMS, ${smsWhatsAppResult?.whatsapp.sent || 0} WhatsApp sent`
         : 'PDF generated successfully',
       data: {
         s3Key: result.s3Key,
@@ -1143,8 +1213,8 @@ export async function generateCasePdf(req: AuthenticatedRequest, res: Response):
         emailsFailed: emailResult?.totalFailed || 0,
         emailResults: emailResult?.results || [],
         emailError: emailError || undefined,
-        smsSent: smsWhatsAppResult?.sms.sent || 0,
-        smsFailed: smsWhatsAppResult?.sms.failed || 0,
+        smsSent: msg91SmsResult?.sent || 0,
+        smsFailed: msg91SmsResult?.failed || 0,
         smsError: smsError || undefined,
         whatsappSent: smsWhatsAppResult?.whatsapp.sent || 0,
         whatsappFailed: smsWhatsAppResult?.whatsapp.failed || 0,
@@ -1318,7 +1388,7 @@ export async function sendTestEmail(req: AuthenticatedRequest, res: Response): P
 }
 
 /**
- * Send a test SMS to verify Exotel integration
+ * Send a test SMS to verify MSG91 integration
  * POST /cases/test-sms
  */
 export async function sendTestSms(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -1333,7 +1403,7 @@ export async function sendTestSms(req: AuthenticatedRequest, res: Response): Pro
       return;
     }
 
-    const result = await exotelService.sendTestSms(phone);
+    const result = await msg91Service.sendTestSms(phone);
 
     if (result.success) {
       logger.info(`Test SMS sent successfully to ${phone}, messageId: ${result.messageId}`);

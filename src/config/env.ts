@@ -74,7 +74,13 @@ export const env = {
   // Note: PFX certificates are now stored per-ACF user in S3 (pfxS3Key, pfxPassword fields on User model)
   // Old global certificate env vars (PDF_SIGN_PFX_PATH, PDF_SIGN_PFX_PASSWORD) are deprecated
 
-  // Exotel SMS & WhatsApp & Voice
+  // MSG91 SMS
+  msg91AuthKey: process.env.MSG91_AUTH_KEY || '',
+  msg91SenderId: process.env.MSG91_SENDER_ID || 'SHNDTL',
+  msg91DetectedViolationTemplateId: process.env.MSG91_DETECTED_VIOLATION_TEMPLATE_ID || '6a7d8959b6a469abad0709a3',
+  msg91HearingNoticeTemplateId: process.env.MSG91_HEARING_NOTICE_TEMPLATE_ID || '6a7d86e76e15dc01ef0b25f2',
+
+  // Exotel WhatsApp & Voice (SMS moved to MSG91)
   exotelApiKey: process.env.EXOTEL_API_KEY || '',
   exotelApiToken: process.env.EXOTEL_API_TOKEN || '',
   exotelAccountSid: process.env.EXOTEL_ACCOUNT_SID || '',
