@@ -752,11 +752,24 @@ class PdfService {
    * Initialize browser instance
    */
   private async getBrowser(): Promise<Browser> {
+    // Check if browser is still connected
+    if (this.browser && !this.browser.connected) {
+      logger.warn('Browser disconnected, creating new instance');
+      this.browser = null;
+    }
+
     if (!this.browser) {
       this.browser = await puppeteer.launch({
-        headless: true,
+        headless: 'new', // Use new headless mode
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-gpu',
+          '--disable-software-rasterizer',
+          '--single-process',
+        ],
       });
     }
     return this.browser;
@@ -850,6 +863,17 @@ class PdfService {
       };
     } catch (error) {
       logger.error('PDF generation error:', error);
+
+      // Reset browser on error to avoid stale connection
+      if (this.browser) {
+        try {
+          await this.browser.close();
+        } catch (closeError) {
+          logger.warn('Error closing browser:', closeError);
+        }
+        this.browser = null;
+      }
+
       return {
         success: false,
         error: error instanceof Error ? error.message : 'PDF generation failed',
