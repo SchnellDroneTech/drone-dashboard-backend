@@ -31,14 +31,17 @@ interface DetectedViolationData {
   violationType: string;
 }
 
-interface HearingNoticeData {
+interface CaseNoticeData {
   district: string;
   vesselName: string;
   vesselNumber: string;
   ownerName: string;
-  observationDate: string;
-  officeName: string;
-  hearingDate: string;
+  date: string;
+  time: string;
+  latitude: string;
+  longitude: string;
+  violationType: string;
+  pdfUrl: string;
 }
 
 // ============================================================
@@ -95,7 +98,8 @@ class Msg91Service {
   private async sendTemplateMessage(
     phone: string,
     templateId: string,
-    variables: Record<string, string>
+    variables: Record<string, string>,
+    shortUrl: boolean = false
   ): Promise<SendSmsResult> {
     const formattedPhone = this.formatPhoneNumber(phone);
 
@@ -112,7 +116,9 @@ class Msg91Service {
       // MSG91 Flow API payload
       const payload = {
         template_id: templateId,
-        short_url: '0',
+        // Must be '1' when the template body contains a link, otherwise the
+        // long presigned/redirect URL inflates the message into many segments
+        short_url: shortUrl ? '1' : '0',
         recipients: [
           {
             mobiles: formattedPhone,
@@ -218,21 +224,27 @@ class Msg91Service {
   }
 
   /**
-   * Send Hearing Notice SMS
-   * Template: HEARING_NOTICE (6a7d86e76e15dc01ef0b25f2)
+   * Send Case Notice SMS (carries the link to the signed case PDF)
+   * Template: 6a9af368eef14fdf130158f2
+   *
+   * NOTE: MSG91 matches these keys against the registered DLT template
+   * case-sensitively, so the capitalisation below must not be changed.
    *
    * Variables:
-   * - ##name## - District name
-   * - ##name1## - Vessel name
-   * - ##number## - Vessel number
-   * - ##owner## - Owner name
-   * - ##date## - Observation date
-   * - ##office## - Office name (ACF office)
-   * - ##hearingdate## - Hearing date
+   * - ##District## - District name
+   * - ##Name##     - Vessel name
+   * - ##Number##   - Vessel number
+   * - ##Owner##    - Owner name
+   * - ##Date##     - Observation date
+   * - ##Time##     - Observation time
+   * - ##Lat##      - Latitude
+   * - ##Long##     - Longitude
+   * - ##Type##     - Violation type
+   * - ##PDF##      - Public link to the signed case PDF
    */
-  async sendHearingNoticeSms(
+  async sendCaseNoticeSms(
     phoneNumbers: string[],
-    data: HearingNoticeData
+    data: CaseNoticeData
   ): Promise<{ sent: number; failed: number; results: SendSmsResult[] }> {
     const results: SendSmsResult[] = [];
     let sent = 0;
@@ -242,25 +254,29 @@ class Msg91Service {
     const validPhones = phoneNumbers.filter(p => p && p.trim().length >= 10);
 
     if (validPhones.length === 0) {
-      logger.warn('No valid phone numbers for Hearing Notice SMS');
+      logger.warn('No valid phone numbers for Case Notice SMS');
       return { sent, failed, results };
     }
 
     const variables = {
-      name: data.district,
-      name1: data.vesselName,
-      number: data.vesselNumber,
-      owner: data.ownerName,
-      date: data.observationDate,
-      office: data.officeName,
-      hearingdate: data.hearingDate,
+      District: data.district,
+      Name: data.vesselName,
+      Number: data.vesselNumber,
+      Owner: data.ownerName,
+      Date: data.date,
+      Time: data.time,
+      Lat: data.latitude,
+      Long: data.longitude,
+      Type: data.violationType,
+      PDF: data.pdfUrl,
     };
 
     for (const phone of validPhones) {
       const result = await this.sendTemplateMessage(
         phone,
-        env.msg91HearingNoticeTemplateId,
-        variables
+        env.msg91CaseNoticeTemplateId,
+        variables,
+        true // shorten the PDF link
       );
       results.push(result);
       if (result.success) {
@@ -273,7 +289,7 @@ class Msg91Service {
       await this.delay(100);
     }
 
-    logger.info(`Hearing Notice SMS: ${sent}/${validPhones.length} sent`);
+    logger.info(`Case Notice SMS: ${sent}/${validPhones.length} sent`);
     return { sent, failed, results };
   }
 
@@ -294,6 +310,27 @@ class Msg91Service {
     };
 
     const result = await this.sendDetectedViolationSms([phone], testData);
+    return result.results[0] || { success: false, error: 'No result', phone };
+  }
+
+  /**
+   * Send test Case Notice SMS (verifies the PDF-link template end to end)
+   */
+  async sendTestCaseNoticeSms(phone: string, pdfUrl?: string): Promise<SendSmsResult> {
+    const testData: CaseNoticeData = {
+      district: 'Test District',
+      vesselName: 'Test Vessel',
+      vesselNumber: 'TEST-123',
+      ownerName: 'Test Owner',
+      date: new Date().toLocaleDateString('en-IN'),
+      time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+      latitude: '18.9220',
+      longitude: '72.8347',
+      violationType: 'Test Violation',
+      pdfUrl: pdfUrl || `${env.publicApiUrl.replace(/\/$/, '')}/health`,
+    };
+
+    const result = await this.sendCaseNoticeSms([phone], testData);
     return result.results[0] || { success: false, error: 'No result', phone };
   }
 

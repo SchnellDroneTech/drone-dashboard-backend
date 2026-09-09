@@ -27,6 +27,13 @@ const upload = multer({
 });
 
 // ============================================================
+// PUBLIC ROUTES (no auth - link is sent to vessel owners over SMS)
+// ============================================================
+
+// GET /cases/notice/:noticeId/pdf - Redirect to the signed case PDF
+router.get('/notice/:noticeId/pdf', asyncHandler(caseController.openNoticePdf));
+
+// ============================================================
 // LOOKUP ROUTES (All authenticated users)
 // ============================================================
 
