@@ -23,6 +23,9 @@ export const env = {
   port: parseInt(process.env.PORT || '5000', 10),
   apiPrefix: process.env.API_PREFIX || '/api/v1',
 
+  // Publicly reachable base URL, used to build PDF links sent over SMS
+  publicApiUrl: process.env.PUBLIC_API_URL || `http://localhost:${process.env.PORT || '5000'}${process.env.API_PREFIX || '/api/v1'}`,
+
   // Timezone & Sync
   timezone: process.env.TZ || 'Asia/Kolkata',
   syncCronSchedule: process.env.SYNC_CRON_SCHEDULE || '0 20 * * *',
@@ -78,7 +81,7 @@ export const env = {
   msg91AuthKey: process.env.MSG91_AUTH_KEY || '',
   msg91SenderId: process.env.MSG91_SENDER_ID || 'SHNDTL',
   msg91DetectedViolationTemplateId: process.env.MSG91_DETECTED_VIOLATION_TEMPLATE_ID || '6a7d8959b6a469abad0709a3',
-  msg91HearingNoticeTemplateId: process.env.MSG91_HEARING_NOTICE_TEMPLATE_ID || '6a7d86e76e15dc01ef0b25f2',
+  msg91CaseNoticeTemplateId: process.env.MSG91_CASE_NOTICE_TEMPLATE_ID || '6a9af368eef14fdf130158f2',
 
   // Exotel WhatsApp & Voice (SMS moved to MSG91)
   exotelApiKey: process.env.EXOTEL_API_KEY || '',

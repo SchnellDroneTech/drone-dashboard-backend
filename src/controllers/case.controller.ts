@@ -18,6 +18,7 @@ import { msg91Service } from '../services/msg91.service';
 import { format } from 'date-fns';
 import { prisma } from '../config/database';
 import { logger } from '../config/logger';
+import { env } from '../config/env';
 import { ObservationStatus, DataSource } from '@prisma/client';
 
 /**
@@ -583,6 +584,48 @@ export async function sendNotifications(req: AuthenticatedRequest, res: Response
 }
 
 /**
+ * Public: open a case notice PDF via a short, permanent link
+ * GET /cases/notice/:noticeId/pdf
+ *
+ * Deliberately unauthenticated - this URL is sent to the vessel owner over SMS.
+ * The notice id is a UUID, and the endpoint mints a fresh presigned S3 URL on
+ * every hit so the link keeps working long after any single signature expires.
+ */
+export async function openNoticePdf(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const { noticeId } = req.params;
+
+    const notice = await prisma.caseNotice.findUnique({
+      where: { id: noticeId },
+      select: { s3Key: true, documentUrl: true },
+    });
+
+    if (!notice || (!notice.s3Key && !notice.documentUrl)) {
+      res.status(404).send('Notice not found');
+      return;
+    }
+
+    if (notice.s3Key) {
+      const url = await s3Service.getPresignedDownloadUrl(notice.s3Key, 3600);
+      if (url) {
+        res.redirect(302, url);
+        return;
+      }
+    }
+
+    if (notice.documentUrl) {
+      res.redirect(302, notice.documentUrl);
+      return;
+    }
+
+    res.status(404).send('Notice document unavailable');
+  } catch (error) {
+    logger.error('Error opening notice PDF:', error);
+    res.status(500).send('Unable to open notice');
+  }
+}
+
+/**
  * Get violation types for dropdown
  * GET /cases/violation-types
  */
@@ -943,6 +986,7 @@ export async function generateCasePdf(req: AuthenticatedRequest, res: Response):
         latitude: true,
         longitude: true,
         observationDate: true,
+        observationTime: true,
         hearingDate: true,
         hearingTime: true,
         depth: true,
@@ -1127,26 +1171,29 @@ export async function generateCasePdf(req: AuthenticatedRequest, res: Response):
     const uniquePhones = [...new Set(ownerPhones.filter(p => p && p.trim()))];
 
     if (sendEmails && uniquePhones.length > 0) {
-      // Send HEARING_NOTICE SMS via MSG91
+      // Send Case Notice SMS (with PDF link) via MSG91
       try {
-        // Office name is constructed from district name
-        const officeName = `सहाय्यक आयुक्त मत्स्यव्यवसाय कार्यालय, ${pdfData.districtName}`;
+        // Short, permanent link - resolves to a freshly signed S3 URL on each hit
+        const noticePdfLink = `${env.publicApiUrl.replace(/\/$/, '')}/cases/notice/${notice.id}/pdf`;
 
-        msg91SmsResult = await msg91Service.sendHearingNoticeSms(uniquePhones, {
+        msg91SmsResult = await msg91Service.sendCaseNoticeSms(uniquePhones, {
           district: pdfData.districtName,
           vesselName: pdfData.vesselName,
           vesselNumber: pdfData.registrationNumber,
           ownerName: pdfData.ownerName,
-          observationDate: pdfData.observationDate,
-          officeName: officeName,
-          hearingDate: pdfData.hearingDate || 'To be announced',
+          date: format(observation.observationDate, 'dd/MM/yyyy'),
+          time: format(observation.observationTime || observation.observationDate, 'HH:mm'),
+          latitude: pdfData.latitude || 'N/A',
+          longitude: pdfData.longitude || 'N/A',
+          violationType: pdfData.violationTypeName,
+          pdfUrl: noticePdfLink,
         });
 
         logger.info(
-          `MSG91 Hearing Notice SMS for ${id}: ${msg91SmsResult.sent}/${uniquePhones.length} sent`
+          `MSG91 Case Notice SMS for ${id}: ${msg91SmsResult.sent}/${uniquePhones.length} sent (PDF: ${noticePdfLink})`
         );
       } catch (err) {
-        logger.error('Error sending MSG91 Hearing Notice SMS:', err);
+        logger.error('Error sending MSG91 Case Notice SMS:', err);
         smsError = err instanceof Error ? err.message : 'MSG91 SMS sending failed';
       }
 
@@ -1403,7 +1450,11 @@ export async function sendTestSms(req: AuthenticatedRequest, res: Response): Pro
       return;
     }
 
-    const result = await msg91Service.sendTestSms(phone);
+    // template: 'notice' tests the Case Notice template (with PDF link),
+    // anything else tests the Detected Violation template
+    const result = req.body.template === 'notice'
+      ? await msg91Service.sendTestCaseNoticeSms(phone, req.body.pdfUrl)
+      : await msg91Service.sendTestSms(phone);
 
     if (result.success) {
       logger.info(`Test SMS sent successfully to ${phone}, messageId: ${result.messageId}`);
