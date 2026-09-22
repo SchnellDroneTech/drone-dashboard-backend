@@ -30,7 +30,9 @@ const upload = multer({
 // PUBLIC ROUTES (no auth - link is sent to vessel owners over SMS)
 // ============================================================
 
-// GET /cases/notice/:noticeId/pdf - Redirect to the signed case PDF
+// GET /cases/notice/pdf?id=<noticeId> - Redirect to the signed case PDF (link sent in SMS)
+router.get('/notice/pdf', asyncHandler(caseController.openNoticePdf));
+// GET /cases/notice/:noticeId/pdf - Legacy link format, kept for SMS already delivered
 router.get('/notice/:noticeId/pdf', asyncHandler(caseController.openNoticePdf));
 
 // ============================================================

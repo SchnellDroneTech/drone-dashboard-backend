@@ -585,7 +585,9 @@ export async function sendNotifications(req: AuthenticatedRequest, res: Response
 
 /**
  * Public: open a case notice PDF via a short, permanent link
- * GET /cases/notice/:noticeId/pdf
+ * GET /cases/notice/pdf?id=<noticeId>   (format sent in SMS - MSG91 CTA whitelist
+ *                                         needs the variable after '?' with no '/')
+ * GET /cases/notice/:noticeId/pdf       (legacy, kept for SMS already delivered)
  *
  * Deliberately unauthenticated - this URL is sent to the vessel owner over SMS.
  * The notice id is a UUID, and the endpoint mints a fresh presigned S3 URL on
@@ -593,7 +595,15 @@ export async function sendNotifications(req: AuthenticatedRequest, res: Response
  */
 export async function openNoticePdf(req: AuthenticatedRequest, res: Response): Promise<void> {
   try {
-    const { noticeId } = req.params;
+    // Accept ?id=<uuid>, a bare ?<uuid>, or the legacy path param
+    const noticeId = String(
+      req.params.noticeId || req.query.id || Object.keys(req.query)[0] || ''
+    );
+
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(noticeId)) {
+      res.status(404).send('Notice not found');
+      return;
+    }
 
     const notice = await prisma.caseNotice.findUnique({
       where: { id: noticeId },
@@ -1174,7 +1184,8 @@ export async function generateCasePdf(req: AuthenticatedRequest, res: Response):
       // Send Case Notice SMS (with PDF link) via MSG91
       try {
         // Short, permanent link - resolves to a freshly signed S3 URL on each hit
-        const noticePdfLink = `${env.publicApiUrl.replace(/\/$/, '')}/cases/notice/${notice.id}/pdf`;
+        // Variable must sit after '?' with no '/' to pass MSG91's dynamic URL whitelist
+        const noticePdfLink = `${env.publicApiUrl.replace(/\/$/, '')}/cases/notice/pdf?id=${notice.id}`;
 
         msg91SmsResult = await msg91Service.sendCaseNoticeSms(uniquePhones, {
           district: pdfData.districtName,
