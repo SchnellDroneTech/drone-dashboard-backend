@@ -768,7 +768,10 @@ class PdfService {
           '--disable-dev-shm-usage',
           '--disable-gpu',
           '--disable-software-rasterizer',
-          '--single-process',
+          // NOTE: do not add '--single-process'. It crashes modern Chrome on
+          // Linux (the browser exits before the DevTools port opens, surfacing
+          // as "Failed to launch the browser process!"), which broke all PDF
+          // generation - and therefore both SMS - in production.
         ],
       });
     }
