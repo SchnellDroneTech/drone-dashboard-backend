@@ -29,9 +29,10 @@ interface DetectedViolationData {
   latitude: string;
   longitude: string;
   violationType: string;
+  pdfUrl: string;
 }
 
-interface HearingNoticeData {
+interface CaseNoticeData {
   district: string;
   vesselName: string;
   vesselNumber: string;
@@ -39,6 +40,34 @@ interface HearingNoticeData {
   observationDate: string;
   officeName: string;
   hearingDate: string;
+}
+
+
+// ============================================================
+// DLT VARIABLE LIMITS
+// ============================================================
+
+/**
+ * DLT caps the content of each registered template variable. Overrunning it
+ * fails the send with "DLT Template variable exceeded max length" while the
+ * MSG91 API still answers type:"success", so it must be enforced before sending.
+ * Raise this only after raising the registered length on the DLT portal.
+ */
+const MAX_VAR_LEN = 30;
+
+/**
+ * Longest wording of the adjudicating office that fits inside the DLT cap.
+ */
+export function buildOfficeName(districtName: string): string {
+  const district = (districtName || '').trim();
+  const forms = [
+    `सहाय्यक आयुक्त मत्स्यव्यवसाय कार्यालय, ${district}`,
+    `सहाय्यक आयुक्त मत्स्यव्यवसाय, ${district}`,
+    `सहा. आयुक्त मत्स्यव्यवसाय, ${district}`,
+    `सहा. आयुक्त, ${district}`,
+    district,
+  ];
+  return forms.find(f => f.length <= MAX_VAR_LEN) ?? district.slice(0, MAX_VAR_LEN);
 }
 
 // ============================================================
@@ -95,9 +124,19 @@ class Msg91Service {
   private async sendTemplateMessage(
     phone: string,
     templateId: string,
-    variables: Record<string, string>
+    variables: Record<string, string>,
+    shortUrl: boolean = false
   ): Promise<SendSmsResult> {
     const formattedPhone = this.formatPhoneNumber(phone);
+
+    const overlong = Object.entries(variables).filter(([, v]) => (v ?? '').length > MAX_VAR_LEN);
+    if (overlong.length > 0) {
+      logger.error(
+        `MSG91 template ${templateId}: variable(s) over the ${MAX_VAR_LEN}-char DLT limit - ` +
+        overlong.map(([k, v]) => `${k}=${v.length}`).join(', ') +
+        '. The operator will reject this message even though the API returns success.'
+      );
+    }
 
     if (!this.isConfigured || !this.client) {
       logger.info(`[MSG91 LOG] Would send to ${formattedPhone}: Template=${templateId}, Vars=${JSON.stringify(variables)}`);
@@ -112,7 +151,9 @@ class Msg91Service {
       // MSG91 Flow API payload
       const payload = {
         template_id: templateId,
-        short_url: '0',
+        // Must be '1' when the template body contains a link, otherwise the
+        // long presigned/redirect URL inflates the message into many segments
+        short_url: shortUrl ? '1' : '0',
         recipients: [
           {
             mobiles: formattedPhone,
@@ -154,19 +195,23 @@ class Msg91Service {
   }
 
   /**
-   * Send Detected Violation SMS
-   * Template: Detected_Violation (6a7d8959b6a469abad0709a3)
+   * Send Detected Violation SMS - carries the link to the signed case PDF
+   * Template: MSG91_DETECTED_VIOLATION_TEMPLATE_ID (6a9af368eef14fdf130158f2)
+   *
+   * NOTE: MSG91 matches these keys against the registered DLT template
+   * case-sensitively. The capitalisation below must not be changed.
    *
    * Variables:
-   * - ##district## - District name
-   * - ##name## - Vessel name
-   * - ##number## - Vessel number
-   * - ##owner## - Owner name
-   * - ##date## - Observation date
-   * - ##time## - Observation time
-   * - ##lat## - Latitude
-   * - ##long## - Longitude
-   * - ##type## - Violation type
+   * - ##District## - District name
+   * - ##Name##     - Vessel name
+   * - ##Number##   - Vessel number
+   * - ##Owner##    - Owner name
+   * - ##Date##     - Observation date
+   * - ##Time##     - Observation time
+   * - ##Lat##      - Latitude
+   * - ##Long##     - Longitude
+   * - ##Type##     - Violation type
+   * - ##PDF##      - Public link to the signed case PDF
    */
   async sendDetectedViolationSms(
     phoneNumbers: string[],
@@ -185,22 +230,24 @@ class Msg91Service {
     }
 
     const variables = {
-      district: data.district,
-      name: data.vesselName,
-      number: data.vesselNumber,
-      owner: data.ownerName,
-      date: data.date,
-      time: data.time,
-      lat: data.latitude,
-      long: data.longitude,
-      type: data.violationType,
+      District: data.district,
+      Name: data.vesselName,
+      Number: data.vesselNumber,
+      Owner: data.ownerName,
+      Date: data.date,
+      Time: data.time,
+      Lat: data.latitude,
+      Long: data.longitude,
+      Type: data.violationType,
+      PDF: data.pdfUrl,
     };
 
     for (const phone of validPhones) {
       const result = await this.sendTemplateMessage(
         phone,
         env.msg91DetectedViolationTemplateId,
-        variables
+        variables,
+        true // shorten the PDF link
       );
       results.push(result);
       if (result.success) {
@@ -218,21 +265,24 @@ class Msg91Service {
   }
 
   /**
-   * Send Hearing Notice SMS
-   * Template: HEARING_NOTICE (6a7d86e76e15dc01ef0b25f2)
+   * Send Case Notice SMS - HEARING_Final, hearing notice, no link
+   * Template: MSG91_CASE_NOTICE_TEMPLATE_ID (6acc8c1e3e72efab6401ba72)
+   *
+   * NOTE: these keys are lowercase in the registered DLT template and MSG91
+   * matches case-sensitively, so do not "tidy" them to match the other template.
    *
    * Variables:
-   * - ##name## - District name
-   * - ##name1## - Vessel name
-   * - ##number## - Vessel number
-   * - ##owner## - Owner name
-   * - ##date## - Observation date
-   * - ##office## - Office name (ACF office)
-   * - ##hearingdate## - Hearing date
+   * - ##name##        - District name
+   * - ##name1##       - Vessel name
+   * - ##number##      - Vessel number
+   * - ##owner##       - Owner name
+   * - ##date##        - Observation date
+   * - ##ACFoffice##   - Adjudicating office (ACF office)
+   * - ##hdate##       - Hearing date
    */
-  async sendHearingNoticeSms(
+  async sendCaseNoticeSms(
     phoneNumbers: string[],
-    data: HearingNoticeData
+    data: CaseNoticeData
   ): Promise<{ sent: number; failed: number; results: SendSmsResult[] }> {
     const results: SendSmsResult[] = [];
     let sent = 0;
@@ -242,7 +292,7 @@ class Msg91Service {
     const validPhones = phoneNumbers.filter(p => p && p.trim().length >= 10);
 
     if (validPhones.length === 0) {
-      logger.warn('No valid phone numbers for Hearing Notice SMS');
+      logger.warn('No valid phone numbers for Case Notice SMS');
       return { sent, failed, results };
     }
 
@@ -252,14 +302,16 @@ class Msg91Service {
       number: data.vesselNumber,
       owner: data.ownerName,
       date: data.observationDate,
-      office: data.officeName,
-      hearingdate: data.hearingDate,
+      ACFoffice: buildOfficeName(data.officeName.includes(',')
+        ? data.officeName.split(',').pop()!.trim()
+        : data.officeName),
+      hdate: data.hearingDate,
     };
 
     for (const phone of validPhones) {
       const result = await this.sendTemplateMessage(
         phone,
-        env.msg91HearingNoticeTemplateId,
+        env.msg91CaseNoticeTemplateId,
         variables
       );
       results.push(result);
@@ -273,7 +325,7 @@ class Msg91Service {
       await this.delay(100);
     }
 
-    logger.info(`Hearing Notice SMS: ${sent}/${validPhones.length} sent`);
+    logger.info(`Case Notice SMS: ${sent}/${validPhones.length} sent`);
     return { sent, failed, results };
   }
 
@@ -291,9 +343,28 @@ class Msg91Service {
       latitude: '18.9220',
       longitude: '72.8347',
       violationType: 'Test Violation',
+      pdfUrl: `${env.publicApiUrl.replace(/\/$/, '')}/health`,
     };
 
     const result = await this.sendDetectedViolationSms([phone], testData);
+    return result.results[0] || { success: false, error: 'No result', phone };
+  }
+
+  /**
+   * Send test Case Notice SMS (verifies the PDF-link template end to end)
+   */
+  async sendTestCaseNoticeSms(phone: string): Promise<SendSmsResult> {
+    const testData: CaseNoticeData = {
+      district: 'Test District',
+      vesselName: 'Test Vessel',
+      vesselNumber: 'TEST-123',
+      ownerName: 'Test Owner',
+      observationDate: new Date().toLocaleDateString('en-IN'),
+      officeName: 'Test District',
+      hearingDate: new Date().toLocaleDateString('en-IN'),
+    };
+
+    const result = await this.sendCaseNoticeSms([phone], testData);
     return result.results[0] || { success: false, error: 'No result', phone };
   }
 
