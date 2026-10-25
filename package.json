@@ -19,6 +19,8 @@
     "db:seed:admin:prod": "node dist/prisma/seed-admin.js",
     "db:seed:flights": "tsx src/script/seed-flights.ts",
     "db:seed:flights:prod": "node dist/script/seed-flights.js",
+    "db:backdate": "tsx src/prisma/backdatedscripts.ts",
+    "db:backdate:prod": "node dist/prisma/backdatedscripts.js",
     "db:studio": "prisma studio",
     "db:reset": "prisma db push --force-reset && npm run db:seed:master && npm run db:seed:admin",
     "sync:manual": "tsx src/jobs/runSync.ts",
