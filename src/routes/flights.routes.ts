@@ -14,6 +14,8 @@ import {
   deleteFlight,
   getFlightStats,
   exportFlights,
+  previewAutoGenerate,
+  commitAutoGenerate,
 } from '../controllers/flights.controller';
 import { authenticate, requireAdmin, asyncHandler } from '../middleware';
 
@@ -35,6 +37,12 @@ router.get('/stats', asyncHandler(getFlightStats));
 
 // GET /flights/export - Export flights for Excel (admin only)
 router.get('/export', requireAdmin, asyncHandler(exportFlights));
+
+// POST /flights/auto-generate/preview - Generate flights preview, no writes (admin only)
+router.post('/auto-generate/preview', requireAdmin, asyncHandler(previewAutoGenerate));
+
+// POST /flights/auto-generate/commit - Replace district's flights on the range with previewed ones (admin only)
+router.post('/auto-generate/commit', requireAdmin, asyncHandler(commitAutoGenerate));
 
 // =============================================================================
 // CRUD ROUTES (Admin only)

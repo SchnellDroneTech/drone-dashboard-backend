@@ -7,6 +7,7 @@ import { Response } from 'express';
 import { validationResult } from 'express-validator';
 import { AuthenticatedRequest } from '../types';
 import { flightsService } from '../services/flights.service';
+import { flightAutoGenService, AutoGenValidationError } from '../services/flight-autogen.service';
 import { logger } from '../config/logger';
 
 /**
@@ -276,5 +277,64 @@ export async function exportFlights(req: AuthenticatedRequest, res: Response): P
       success: false,
       error: error.message || 'Failed to export flights',
     });
+  }
+}
+
+// =============================================================================
+// AUTO-GENERATE
+// =============================================================================
+
+function sendAutoGenError(res: Response, error: any, fallback: string): void {
+  if (error instanceof AutoGenValidationError) {
+    res.status(400).json({ success: false, error: error.message });
+    return;
+  }
+  if (error?.code === 'P2002') {
+    res.status(409).json({ success: false, error: 'Flight code conflict, please regenerate the preview and try again' });
+    return;
+  }
+  logger.error(`${fallback}:`, error);
+  res.status(500).json({ success: false, error: fallback });
+}
+
+/**
+ * Preview auto-generated flights (no database writes)
+ * POST /flights/auto-generate/preview
+ */
+export async function previewAutoGenerate(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const { enforcementAreaId, location, startDate, endDate, totalMinutes, flightsPerDay } = req.body;
+    const preview = await flightAutoGenService.preview({
+      enforcementAreaId,
+      location: typeof location === 'string' ? location.trim() : '',
+      startDate,
+      endDate,
+      totalMinutes: Number(totalMinutes),
+      flightsPerDay: flightsPerDay === undefined || flightsPerDay === '' ? 3 : Number(flightsPerDay),
+    });
+    res.json({ success: true, data: preview });
+  } catch (error: any) {
+    sendAutoGenError(res, error, 'Failed to generate preview');
+  }
+}
+
+/**
+ * Create the previewed flights, replacing the district's flights on those days
+ * POST /flights/auto-generate/commit
+ */
+export async function commitAutoGenerate(req: AuthenticatedRequest, res: Response): Promise<void> {
+  try {
+    const { enforcementAreaId, location, startDate, endDate, remarks, flights } = req.body;
+    const result = await flightAutoGenService.commit(
+      { enforcementAreaId, location, startDate, endDate, remarks, flights },
+      req.user?.id
+    );
+    res.status(201).json({
+      success: true,
+      data: result,
+      message: `Created ${result.created} flights${result.deleted ? `, replaced ${result.deleted}` : ''}`,
+    });
+  } catch (error: any) {
+    sendAutoGenError(res, error, 'Failed to create flights');
   }
 }

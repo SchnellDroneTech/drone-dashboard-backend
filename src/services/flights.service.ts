@@ -54,7 +54,7 @@ export interface FlightWithArea extends Flight {
 /**
  * Generate unique flight code: LOCATION-YYYYMMDD-HHMM
  */
-function generateFlightCode(location: string, flightDate: Date, takeoffTime: string): string {
+export function generateFlightCode(location: string, flightDate: Date, takeoffTime: string): string {
   const locationCode = location
     .toUpperCase()
     .replace(/[^A-Z0-9]/g, '')
@@ -69,7 +69,7 @@ function generateFlightCode(location: string, flightDate: Date, takeoffTime: str
 /**
  * Parse time string to Date object for database storage
  */
-function parseTimeToDate(timeStr: string): Date {
+export function parseTimeToDate(timeStr: string): Date {
   const [hours, minutes] = timeStr.split(':').map(Number);
   const date = new Date(1970, 0, 1, hours, minutes, 0);
   return date;
@@ -96,7 +96,7 @@ function calculateDurationMinutes(takeoffTime: string, landingTime: string): num
 /**
  * Format time from Date to HH:mm string
  */
-function formatTimeFromDate(date: Date): string {
+export function formatTimeFromDate(date: Date): string {
   const hours = date.getHours().toString().padStart(2, '0');
   const minutes = date.getMinutes().toString().padStart(2, '0');
   return `${hours}:${minutes}`;
