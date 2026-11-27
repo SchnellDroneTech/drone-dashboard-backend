@@ -25,6 +25,8 @@ export const AUTOGEN_LIMITS = {
   maxDays: 366,
   maxFlightsPerDay: 10,
   minFlightMinutes: 5,
+  /** Every generated day must total at least 6 hrs of flying */
+  minDayMinutes: 6 * 60,
   /** Earliest allowed takeoff (05:00) */
   dayStart: 5 * 60,
   /** Latest allowed landing (23:50) - generated flights never cross midnight */
@@ -348,6 +350,12 @@ class FlightAutoGenService {
     }
 
     const totalFlights = days.length * flightsPerDay;
+    const minDayTotal = days.length * AUTOGEN_LIMITS.minDayMinutes;
+    if (totalMinutes < minDayTotal) {
+      throw new AutoGenValidationError(
+        `Total hours too low: every day needs at least ${toHHmm(AUTOGEN_LIMITS.minDayMinutes)} hrs, so ${days.length} day(s) need at least ${toHHmm(minDayTotal)} hrs. Shorten the date range or increase the hours.`
+      );
+    }
     const minTotal = totalFlights * AUTOGEN_LIMITS.minFlightMinutes;
     if (totalMinutes < minTotal) {
       throw new AutoGenValidationError(
@@ -400,7 +408,7 @@ class FlightAutoGenService {
 
     // 1. Split the total across days (exact), within per-day feasibility bounds
     const dayMax = maxDayMinutes(k);
-    const dayMin = k * AUTOGEN_LIMITS.minFlightMinutes;
+    const dayMin = Math.max(k * AUTOGEN_LIMITS.minFlightMinutes, AUTOGEN_LIMITS.minDayMinutes);
     const avgDay = totalMinutes / days.length;
     // Shrink jitter when the average day is close to its limits so clamping stays rare
     const jitter = Math.max(0, Math.min(profile.dailyJitter, dayMax / avgDay - 1, 1 - dayMin / avgDay));
@@ -501,6 +509,12 @@ class FlightAutoGenService {
     for (const [date, sorties] of byDay) {
       if (sorties.length > AUTOGEN_LIMITS.maxFlightsPerDay) {
         throw new AutoGenValidationError(`${date}: more than ${AUTOGEN_LIMITS.maxFlightsPerDay} flights in a day`);
+      }
+      const dayTotal = sorties.reduce((m, [t, l]) => m + (l - t), 0);
+      if (dayTotal < AUTOGEN_LIMITS.minDayMinutes) {
+        throw new AutoGenValidationError(
+          `${date}: flights total ${toHHmm(dayTotal)} hrs, each day needs at least ${toHHmm(AUTOGEN_LIMITS.minDayMinutes)} hrs`
+        );
       }
       sorties.sort((a, b) => a[0] - b[0]);
       for (let i = 1; i < sorties.length; i++) {
